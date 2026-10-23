@@ -4,7 +4,10 @@ These tests use no API calls. They pin the timing behaviour that decides
 whether the generated subtitles stay aligned with the spoken audio.
 """
 
+import contextlib
+import io
 import unittest
+from unittest import mock
 from datetime import datetime
 
 import audio2srt
@@ -120,6 +123,28 @@ class ResolveApiKeyTests(unittest.TestCase):
 
     def test_returns_none_for_blank_input(self):
         self.assertIsNone(audio2srt.resolve_api_key({"OPENAI_API_KEY": " "}, lambda _m: ""))
+
+
+
+class MainTests(unittest.TestCase):
+    """Verify the command line entry point."""
+
+    def test_prints_help_without_arguments(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exit_code = audio2srt.main([])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("usage: audio2srt.py", output.getvalue())
+        self.assertIn("OPENAI_API_KEY", output.getvalue())
+
+    def test_rejects_missing_file_before_asking_for_key(self):
+        def fail_prompt(*_args):
+            raise AssertionError("must not ask for a key when the file is missing")
+
+        with mock.patch.object(audio2srt, "resolve_api_key", fail_prompt), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(audio2srt.main(["no-such-file.mp3"]), 1)
 
 
 if __name__ == "__main__":

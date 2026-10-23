@@ -9,8 +9,10 @@
 #   - 毫秒時間碼改以整數運算，避免 datetime 的 %f 把毫秒當成微秒
 #   - 每段長度限制在 Whisper 的長度上限內，避免尾端內容被 API 截斷
 
+import argparse
 import getpass
 import os
+import sys
 import tempfile
 
 import openai
@@ -220,19 +222,49 @@ def process_audio(file_path, max_bytes: int = MAX_FILE_SIZE):
     return full_srt.strip()
 
 
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("請提供音訊檔案作為參數")
-        exit(1)
+def build_parser():
+    """建立命令列參數解析器。"""
+    parser = argparse.ArgumentParser(
+        prog="audio2srt.py",
+        description="用 OpenAI Whisper 把音訊檔轉成 SRT 字幕（輸出到同目錄、同檔名的 .srt）。",
+        epilog=(
+            "範例：\n"
+            "  python audio2srt.py interview.mp3\n"
+            "\n"
+            "API Key：有設定環境變數 OPENAI_API_KEY 就直接使用，\n"
+            "否則執行時會以隱藏輸入詢問，Key 只在本次執行有效。\n"
+            "\n"
+            "下一步：人工校閱 SRT 後，再用 srt_to_fcpxml.py 轉成 Final Cut Pro 的 fcpxml。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("audio_file", help="要轉錄的音訊檔（mp3、m4a、wav 等 ffmpeg 可讀的格式）")
+    return parser
+
+
+def main(argv=None):
+    """執行命令列轉錄流程，回傳結束碼。"""
+    if argv is None:
+        argv = sys.argv[1:]
+    parser = build_parser()
+    # 沒給任何參數時顯示完整說明，而不是只有一行錯誤訊息。
+    if not argv:
+        parser.print_help()
+        return 1
+    args = parser.parse_args(argv)
+
+    input_file = args.audio_file
+    # 先檢查檔案，避免輸入 Key 之後才發現路徑打錯。
+    if not os.path.isfile(input_file):
+        print(f"找不到音訊檔：{input_file}", file=sys.stderr)
+        return 1
 
     api_key = resolve_api_key()
     if not api_key:
         print("未輸入 OpenAI API Key，已取消")
-        exit(1)
+        return 1
     openai.api_key = api_key
 
-    input_file = sys.argv[1]
     srt_text = process_audio(input_file)
 
     output_file = os.path.splitext(input_file)[0] + ".srt"
@@ -240,3 +272,8 @@ if __name__ == "__main__":
         f.write(srt_text)
 
     print(f"字幕已儲存至：{output_file}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -419,6 +419,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             default=default,
             help=f"Title position {axis.upper()} in pixels (default: {_number(default)})",
         )
+    if argv is None:
+        argv = sys.argv[1:]
+    # Show the full help, not just a one-line usage error, when run bare.
+    if not argv:
+        parser.print_help()
+        return 1
     args = parser.parse_args(argv)
     style = SubtitleStyle(
         font=args.font,

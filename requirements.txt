@@ -1,3 +1,5 @@
 # Python dependencies for audio2srt.py
 openai==3.36.1
 pydub==0.25.1
+# Python 3.13 起移除了內建的 audioop，pydub 需要這個替代套件。
+audioop-lts==0.2.2; python_version >= "3.13"

@@ -4,6 +4,8 @@ These tests keep the SRT-to-FCPXML workflow independent from audio transcription
 so a corrected subtitle file can be converted without calling the OpenAI API.
 """
 
+import contextlib
+import io
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -104,6 +106,14 @@ class SrtToFcpxmlTests(unittest.TestCase):
         self.assertEqual(text_style.attrib["fontFace"], "Bold")
         self.assertEqual(text_style.attrib["fontSize"], "48")
         self.assertEqual(title.find("param[@name='Position']").attrib["value"], "12.5 -300 10")
+
+    def test_cli_prints_help_without_arguments(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exit_code = main([])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--fps", output.getvalue())
 
     def test_cli_passes_style_options_to_the_output(self):
         with tempfile.TemporaryDirectory() as directory:
