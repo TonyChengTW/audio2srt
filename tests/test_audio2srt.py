@@ -97,5 +97,30 @@ class SrtAssemblyTests(unittest.TestCase):
         self.assertIn("00:13:02,622 --> 00:13:03,622", srt_text)
 
 
+
+class ResolveApiKeyTests(unittest.TestCase):
+    """Verify the API key comes from the environment or a hidden prompt."""
+
+    def test_uses_environment_key_without_prompting(self):
+        def prompt(_message):
+            raise AssertionError("must not prompt when the variable is set")
+
+        key = audio2srt.resolve_api_key({"OPENAI_API_KEY": "sk-env"}, prompt)
+        self.assertEqual(key, "sk-env")
+
+    def test_prompts_when_environment_key_is_missing(self):
+        messages = []
+
+        def prompt(message):
+            messages.append(message)
+            return "  sk-typed  "
+
+        self.assertEqual(audio2srt.resolve_api_key({}, prompt), "sk-typed")
+        self.assertEqual(messages, ["請輸入 OpenAI API Key (隱藏輸入) : "])
+
+    def test_returns_none_for_blank_input(self):
+        self.assertIsNone(audio2srt.resolve_api_key({"OPENAI_API_KEY": " "}, lambda _m: ""))
+
+
 if __name__ == "__main__":
     unittest.main()

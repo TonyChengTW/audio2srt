@@ -9,6 +9,7 @@
 #   - 毫秒時間碼改以整數運算，避免 datetime 的 %f 把毫秒當成微秒
 #   - 每段長度限制在 Whisper 的長度上限內，避免尾端內容被 API 截斷
 
+import getpass
 import os
 import tempfile
 
@@ -169,6 +170,20 @@ def shift_and_renumber_srt(srt_text, offset_seconds, index_start):
     return "\n".join(shifted), index_start + len(entries)
 
 
+def resolve_api_key(environ=None, prompt=getpass.getpass):
+    """取得 OpenAI API Key，環境變數沒有設定時才以隱藏輸入詢問。
+
+    輸入的 Key 只留在本次執行的程序內，不會寫回 shell 環境，程式結束即消失，
+    因此不需要事先 export，也不需要事後 unset。空白輸入回傳 None。
+    """
+    if environ is None:
+        environ = os.environ
+    api_key = environ.get("OPENAI_API_KEY", "").strip()
+    if api_key:
+        return api_key
+    return prompt("請輸入 OpenAI API Key (隱藏輸入) : ").strip() or None
+
+
 def transcribe(file_path):
     """呼叫 Whisper 取得 SRT 格式的轉錄結果。"""
     with open(file_path, "rb") as f:
@@ -210,6 +225,12 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("請提供音訊檔案作為參數")
         exit(1)
+
+    api_key = resolve_api_key()
+    if not api_key:
+        print("未輸入 OpenAI API Key，已取消")
+        exit(1)
+    openai.api_key = api_key
 
     input_file = sys.argv[1]
     srt_text = process_audio(input_file)
