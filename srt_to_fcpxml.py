@@ -11,6 +11,7 @@ import re
 import sys
 import warnings
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 from typing import List, Optional, Sequence, TypedDict
@@ -50,19 +51,34 @@ FRAME_RATES = {
     "60": Fraction(60, 1),
 }
 
-# 字幕外觀預設值。這些參數經 FCP 實測確認：Final Cut Pro 會捨棄 inline 的
-# text-style 屬性，只認 text-style-def 參照；而且缺少 fontColor 時會套用
-# 黑色填色，在黑色畫面上就完全看不見字。
-SUBTITLE_FONT = "DFPHanziPenW5-B5-TW"  # 華康翩翩體 W5 的 PostScript 名稱
-SUBTITLE_FONT_FACE = "Regular"
-SUBTITLE_FONT_SIZE = "58"
+# Basic Title 範本內「Position」參數的 key。用它設定的位置單位是像素
+# （中心原點，負 Y 代表往下）。不能改用 adjust-transform：那裡的 position
+# 單位是畫面高度的百分比，寫入像素值會把字幕推到畫面外而看不見。
+BASIC_TITLE_POSITION_KEY = "9999/999166631/999166633/1/100/101"
+
+# 字幕外觀預設值。Final Cut Pro 會捨棄 inline 的 text-style 屬性，只認
+# text-style-def 參照；而且缺少 fontColor 時會套用黑色填色，在黑色畫面上
+# 就完全看不見字。
 # FCP 匯入時會把 1.0 正規化為 0.999996，這個寫法才會被 FCP 接受為白色。
 SUBTITLE_FONT_COLOR = "0.999996 1 1 1"
+# 預設開啟陰影。shadowOffset 是「距離 角度」，與 FCP 匯出的格式相同。
 SUBTITLE_SHADOW_COLOR = "0 0 0 0.75"
-SUBTITLE_SHADOW_OFFSET = "5"
+SUBTITLE_SHADOW_OFFSET = "5 315"
 SUBTITLE_SHADOW_BLUR_RADIUS = "3"
-# 字幕在畫面上的垂直位置（像素，中心原點，負值代表往下）。
-SUBTITLE_Y_POSITION = "-410"
+
+
+@dataclass(frozen=True)
+class SubtitleStyle:
+    """Font and on-screen position applied to every generated title."""
+
+    # PingFang SC 內建於每台 Mac，避免目標機器缺字體時被替換。
+    font: str = "PingFang SC"
+    font_face: str = "Semibold"  # macOS 中文介面的「中粗體」
+    font_size: float = 62
+    # Basic Title Position，單位為像素。
+    x: float = 0
+    y: float = -415
+    z: float = 0
 
 # Use the common SRT time form, while accepting either comma or dot before the
 # millisecond field. Optional trailing cue settings are ignored intentionally.
@@ -178,10 +194,16 @@ def _format_name(frame_rate: Fraction) -> str:
     return "FFVideoFormat1080pCustom"
 
 
+def _number(value: float) -> str:
+    """Format a numeric option without a redundant trailing ``.0``."""
+    return f"{value:g}"
+
+
 def build_fcpxml(
     cues: Sequence[SubtitleCue],
     fps: str = "30",
     project_name: str = "SRT Titles",
+    style: Optional[SubtitleStyle] = None,
 ) -> str:
     """Build an FCPXML project containing one connected Basic Title per cue.
 
@@ -194,6 +216,10 @@ def build_fcpxml(
         raise ValueError(f"Unsupported fps {fps!r}; choose one of: {supported}")
     if not cues:
         raise ValueError("At least one SRT cue is required")
+
+    if style is None:
+        style = SubtitleStyle()
+    position = " ".join(_number(value) for value in (style.x, style.y, style.z))
 
     frame_rate = FRAME_RATES[fps]
     frame_duration = _frame_time(1, frame_rate)
@@ -279,6 +305,13 @@ def build_fcpxml(
             },
         )
 
+        # Title parameters must precede the text content.
+        ET.SubElement(
+            title,
+            "param",
+            {"name": "Position", "key": BASIC_TITLE_POSITION_KEY, "value": position},
+        )
+
         # Reference a separate text-style definition. Final Cut Pro drops the
         # attributes of an inline text-style, and without an explicit font
         # colour it renders the glyphs black, which is invisible on a black
@@ -292,9 +325,9 @@ def build_fcpxml(
             style_definition,
             "text-style",
             {
-                "font": SUBTITLE_FONT,
-                "fontFace": SUBTITLE_FONT_FACE,
-                "fontSize": SUBTITLE_FONT_SIZE,
+                "font": style.font,
+                "fontFace": style.font_face,
+                "fontSize": _number(style.font_size),
                 "fontColor": SUBTITLE_FONT_COLOR,
                 "shadowColor": SUBTITLE_SHADOW_COLOR,
                 "shadowOffset": SUBTITLE_SHADOW_OFFSET,
@@ -302,10 +335,6 @@ def build_fcpxml(
                 "alignment": "center",
             },
         )
-
-        # Set the clip transform to the requested lower-screen Y coordinate.
-        ET.SubElement(title, "adjust-transform", {"position": f"0 {SUBTITLE_Y_POSITION}"})
-
 
     # Keep the generated XML compact. ElementTree's generic pretty-printer adds
     # whitespace inside mixed-content <text> elements, which would become real
@@ -322,6 +351,7 @@ def convert_srt_file(
     srt_path: Path,
     output_path: Optional[Path] = None,
     fps: str = "30",
+    style: Optional[SubtitleStyle] = None,
 ) -> Path:
     """Convert one reviewed SRT file and return the written FCPXML path."""
     srt_path = Path(srt_path)
@@ -336,7 +366,9 @@ def convert_srt_file(
 
     srt_text = srt_path.read_text(encoding="utf-8-sig")
     cues = parse_srt(srt_text)
-    fcpxml_text = build_fcpxml(cues, fps=fps, project_name=srt_path.stem)
+    fcpxml_text = build_fcpxml(
+        cues, fps=fps, project_name=srt_path.stem, style=style
+    )
     output_path.write_text(fcpxml_text, encoding="utf-8")
     return output_path
 
@@ -362,10 +394,43 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         type=Path,
         help="Output FCPXML path (default: same filename with .fcpxml extension)",
     )
+    defaults = SubtitleStyle()
+    parser.add_argument(
+        "--font",
+        default=defaults.font,
+        help=f"Font family name (default: {defaults.font})",
+    )
+    parser.add_argument(
+        "--font-face",
+        default=defaults.font_face,
+        help=f"Font face, e.g. Regular, Medium, Semibold (default: {defaults.font_face})",
+    )
+    parser.add_argument(
+        "--font-size",
+        type=float,
+        default=defaults.font_size,
+        help=f"Font size (default: {_number(defaults.font_size)})",
+    )
+    for axis in ("x", "y", "z"):
+        default = getattr(defaults, axis)
+        parser.add_argument(
+            f"--{axis}",
+            type=float,
+            default=default,
+            help=f"Title position {axis.upper()} in pixels (default: {_number(default)})",
+        )
     args = parser.parse_args(argv)
+    style = SubtitleStyle(
+        font=args.font,
+        font_face=args.font_face,
+        font_size=args.font_size,
+        x=args.x,
+        y=args.y,
+        z=args.z,
+    )
 
     try:
-        output_path = convert_srt_file(args.srt_file, args.output, args.fps)
+        output_path = convert_srt_file(args.srt_file, args.output, args.fps, style)
     except (OSError, UnicodeError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2

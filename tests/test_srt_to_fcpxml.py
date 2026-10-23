@@ -4,10 +4,12 @@ These tests keep the SRT-to-FCPXML workflow independent from audio transcription
 so a corrected subtitle file can be converted without calling the OpenAI API.
 """
 
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
-from srt_to_fcpxml import build_fcpxml, parse_srt
+from srt_to_fcpxml import SubtitleStyle, build_fcpxml, main, parse_srt
 
 
 class SrtToFcpxmlTests(unittest.TestCase):
@@ -63,16 +65,61 @@ class SrtToFcpxmlTests(unittest.TestCase):
         style = style_definition.find("text-style")
         self.assertEqual(style.attrib["fontColor"], "0.999996 1 1 1")
 
-    def test_applies_requested_font_size_and_vertical_position(self):
-        # The requested look is 華康翩翩體 at size 58, sitting at Y = -410.
+    def test_applies_default_font_size_and_position(self):
+        # The requested look is PingFang SC Semibold at size 62, placed with
+        # the Basic Title Position parameter at X=0, Y=-415, Z=0 pixels.
         cue = {"start_ms": 0, "end_ms": 1000, "text": "樣式測試"}
         root = ET.fromstring(build_fcpxml([cue], fps="30"))
         title = root.find(".//title")
         style = title.find("text-style-def/text-style")
 
-        self.assertEqual(style.attrib["fontSize"], "58")
-        self.assertEqual(style.attrib["font"], "DFPHanziPenW5-B5-TW")
-        self.assertEqual(title.find("adjust-transform").attrib["position"], "0 -410")
+        self.assertEqual(style.attrib["fontSize"], "62")
+        self.assertEqual(style.attrib["font"], "PingFang SC")
+        self.assertEqual(style.attrib["fontFace"], "Semibold")
+        position = title.find("param[@name='Position']")
+        self.assertIsNotNone(position)
+        self.assertEqual(position.attrib["key"], "9999/999166631/999166633/1/100/101")
+        self.assertEqual(position.attrib["value"], "0 -415 0")
+        # adjust-transform positions are a percentage of frame height, so a
+        # pixel value there pushed the text far off screen in Final Cut Pro.
+        self.assertIsNone(title.find("adjust-transform"))
+        # Final Cut Pro expects title parameters before the text content.
+        self.assertEqual(title[0].tag, "param")
+
+    def test_accepts_custom_font_and_position(self):
+        cue = {"start_ms": 0, "end_ms": 1000, "text": "自訂樣式"}
+        style = SubtitleStyle(
+            font="HanziPen TC",
+            font_face="Bold",
+            font_size=48,
+            x=12.5,
+            y=-300,
+            z=10,
+        )
+        root = ET.fromstring(build_fcpxml([cue], fps="30", style=style))
+        title = root.find(".//title")
+        text_style = title.find("text-style-def/text-style")
+
+        self.assertEqual(text_style.attrib["font"], "HanziPen TC")
+        self.assertEqual(text_style.attrib["fontFace"], "Bold")
+        self.assertEqual(text_style.attrib["fontSize"], "48")
+        self.assertEqual(title.find("param[@name='Position']").attrib["value"], "12.5 -300 10")
+
+    def test_cli_passes_style_options_to_the_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            srt_path = Path(directory) / "sample.srt"
+            srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\n命令列\n", encoding="utf-8")
+
+            exit_code = main(
+                [str(srt_path), "--fps", "25", "--font-size", "70", "--y", "-380"]
+            )
+
+            self.assertEqual(exit_code, 0)
+            root = ET.parse(srt_path.with_suffix(".fcpxml")).getroot()
+        title = root.find(".//title")
+        self.assertEqual(root.find("./resources/format").attrib["frameDuration"], "1/25s")
+        self.assertEqual(title.find("text-style-def/text-style").attrib["fontSize"], "70")
+        self.assertEqual(title.find("param[@name='Position']").attrib["value"], "0 -380 0")
 
     def test_requests_a_drop_shadow_on_the_text(self):
         # Drop Shadow is expressed with the shadow attributes of the text style.
@@ -81,7 +128,9 @@ class SrtToFcpxmlTests(unittest.TestCase):
         style = root.find(".//title/text-style-def/text-style")
 
         self.assertEqual(style.attrib["shadowColor"], "0 0 0 0.75")
-        self.assertEqual(style.attrib["shadowOffset"], "5")
+        # FCP stores the offset as "distance angle"; a bare distance is not
+        # the form it writes when Drop Shadow is enabled.
+        self.assertEqual(style.attrib["shadowOffset"], "5 315")
         self.assertIn("shadowBlurRadius", style.attrib)
 
     def test_skips_empty_subtitle_cues_with_a_warning(self):
