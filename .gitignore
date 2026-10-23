@@ -1,2 +1,7 @@
 *.srt
 *.mp3
+*.fcpxml
+.venv/
+__pycache__/
+*.py[cod]
+.env

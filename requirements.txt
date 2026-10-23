@@ -1,0 +1,3 @@
+# Python dependencies for audio2srt.py
+openai==3.36.1
+pydub==0.25.1
